@@ -2,12 +2,15 @@ const express = require("express")
 require("dotenv").config();
 const {
     Worker
-} = require("worker_threads");
+} = require("node:worker_threads");
 const os = require("node:os");
 const {
     processURL
 } = require("./utils");
-const fs = require("node:fs")
+// const fs = require("node:fs")
+const {
+    insertNodes
+} = require("./database")
 
 const app = express();
 app.use(express.json())
@@ -66,48 +69,59 @@ app.post("/crawl", async (req, res) => {
     let url = req.body.url;
     const MAX_PAGES = req.body.max_pages || process.env.MAX_PAGES || 25;
 
-    if (!url) {
-        res.status(400).send({
-            error: "Bad Request",
-            success: false
-        })
-    } else {
-        url = processURL(url)
-        res.sendStatus(204);
-        const alreadyVisited = [];
-        let current = [url];
+    try {
+        if (!url) {
+            res.status(400).send({
+                error: "Invalid URL",
+                success: false
+            })
+        } else {
+            url = processURL(url)
+            res.sendStatus(204);
+            const alreadyVisited = [];
+            let current = [url];
 
-        while ((current.length > 0) && alreadyVisited.length < MAX_PAGES) {
-            for (let i = 0; i < threadCount - 1; i++) {
-                const linksToVisit = current.splice(0, 5).filter(link => !alreadyVisited.find(l => l.url === link));
-                if (linksToVisit.length > 0) {
-                    console.log("Links To Visit: ");
-                    console.log(linksToVisit)
-                    const visited = await createWorkerPromise({
-                        linksToVisit
-                    })
+            while (current.length > 0 && alreadyVisited.length < MAX_PAGES) {
+                for (let i = 0; i < threadCount - 1; i++) {
+                    const linksToVisit = current.splice(0, 5).filter(link => !alreadyVisited.find(l => l.url === link));
 
-                    if (!alreadyVisited.find(page => page.url === visited.url) && typeof visited === 'object' && visited?.success === true) {
-                        console.log("Visited Links: ");
-                        delete visited.success;
-                        console.log(visited)
-                        alreadyVisited.push(visited);
+                    if (linksToVisit.length > 0) {
+                        console.log("Links To Visit: ");
+                        console.log(linksToVisit)
+                        const visited = await createWorkerPromise({
+                            linksToVisit
+                        })
+
+                        if (!alreadyVisited.find(page => page.url === visited.url) && typeof visited === 'object' && visited?.success === true) {
+                            console.log("Visited Links: ");
+                            delete visited.success;
+                            console.log(visited)
+                            alreadyVisited.push(visited);
+                        }
+
+                        console.log("Already visited: ");
+                        console.table(alreadyVisited)
+                        if (visited && visited.hasOwnProperty("links") && visited.links.length > 0)
+                            current.push(...visited.links)
+
+                        current = Array.from(new Set(current));
+                        console.log("Current Length: %d", current.length)
                     }
 
-                    console.log("Already visited: ");
-                    console.table(alreadyVisited)
-                    if (visited && visited.hasOwnProperty("links") && visited.links.length > 0)
-                        current.push(...visited.links)
-
-                    current = Array.from(new Set(current));
-                    console.log("Current Length: %d", current.length)
                 }
 
-            }
-            if (current.length === 0 || alreadyVisited.length >= MAX_PAGES || threads.size == 0) {
-                fs.writeFileSync("output.json", JSON.stringify(alreadyVisited, null, 2));
-                break;
+                if (current.length === 0 || alreadyVisited.length >= MAX_PAGES || threads.size == 0) {
+                    console.log("Task Completed 🎉")
+                    if (alreadyVisited.length > 0) {
+                        // fs.writeFileSync("output.json", JSON.stringify(alreadyVisited, null, 2));
+                        await insertNodes(alreadyVisited)
+                    } else
+                        console.log("Empty Array");
+                    break;
+                }
             }
         }
+    } catch (err) {
+        console.error("Task Failed: " + err.message);
     }
 })

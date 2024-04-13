@@ -7,13 +7,16 @@ const {
     ChatGoogleGenerativeAI,
     GoogleGenerativeAIEmbeddings
 } = require("@langchain/google-genai");
-
+const {
+    loadSummarizationChain
+} = require("langchain/chains")
 const {
     Document
 } = require('langchain/document');
 const {
     RecursiveCharacterTextSplitter
 } = require('langchain/text_splitter')
+
 require("dotenv").config()
 
 const model = new ChatGoogleGenerativeAI({
@@ -30,12 +33,13 @@ const embeddings = new GoogleGenerativeAIEmbeddings({
 class Webpage {
     url = "";
     status = 200;
-    title="";
+    title = "";
     links = [];
     redirects = [];
     is_404 = false;
     keywords = [];
     embeddings = [];
+    summary = "";
 }
 
 const covertHtmlToMd = (html) => {
@@ -76,9 +80,9 @@ async function extract_keywords(documents) {
     }
 }
 
-async function generateEmbeddings(keywords) {
+async function generateEmbeddings(text) {
     try {
-        return (await embeddings.embedQuery(keywords.join(", ")))
+        return (await embeddings.embedQuery(text))
     } catch (err) {
         throw err;
     }
@@ -92,14 +96,25 @@ const processPage = async (text) => {
 
         const documents = await splitter.createDocuments([text])
         console.log("Documents: %d", documents.length)
-        const keywords = (text.length > 0)? await extract_keywords(documents): [];
+        const keywords = (text.length > 0) ? await extract_keywords(documents) : [];
         console.log("Keywords: " + keywords.join(", "))
-        const embeddings = await generateEmbeddings(keywords);
+
+        // Generating a summary
+        const chain = loadSummarizationChain(model, {
+            type: "map_reduce"
+        })
+
+        const summary = (await chain.call({
+            input_documents: documents
+        })).text
+
+        const embeddings = await generateEmbeddings(summary);
         console.log("Embeddings Generated Successfully")
 
         return {
             keywords,
-            embeddings
+            embeddings,
+            summary
         }
     } catch (err) {
         throw err;
@@ -115,7 +130,7 @@ function processURL(url) {
     let t = new URL(url);
     let u = `${t.protocol}//${t.hostname}${(t.port)? `:${t.port}`: ""}${t.pathname}`
 
-    return (u.endsWith("/"))? u.slice(0, -1): u;
+    return (u.endsWith("/")) ? u.slice(0, -1) : u;
 }
 
 const visitPage = async (url) => {
@@ -155,20 +170,22 @@ const visitPage = async (url) => {
 
             // Secondary Processing
             webpage.links = Array.from(new Set(links.map(link => processURL(link)).filter((link) => link.includes(hostname) == true)));
-        
+
             await browser.close();
 
             const {
                 keywords,
-                embeddings
+                embeddings,
+                summary
             } = await processPage(pageContent);
             webpage.keywords = keywords;
             webpage.embeddings = embeddings;
+            webpage.summary = summary;
 
             return webpage;
         }
     } catch (err) {
-        if (err) 
+        if (err)
             throw err
     } finally {
         await browser.close();

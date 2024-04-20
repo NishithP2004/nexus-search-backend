@@ -5,11 +5,14 @@ const {
 } = require("node:worker_threads");
 const os = require("node:os");
 const {
-    processURL
+    sanitiseURL,
+    fetchUrlsFromSitemap, 
+    robots
 } = require("./utils");
 // const fs = require("node:fs")
 const {
-    insertNodes
+    insertNodes,
+    getSearchResults
 } = require("./database")
 
 const app = express();
@@ -67,7 +70,10 @@ function createWorkerPromise(workerData) {
 
 app.post("/crawl", async (req, res) => {
     let url = req.body.url;
-    const MAX_PAGES = req.body.max_pages || process.env.MAX_PAGES || 25;
+    const options = req.query;
+    const MAX_PAGES = options.max_pages || process.env.MAX_PAGES || 25;
+
+    await robots.useRobotsFor(url)
 
     try {
         if (!url) {
@@ -76,14 +82,21 @@ app.post("/crawl", async (req, res) => {
                 success: false
             })
         } else {
-            url = processURL(url)
+            url = sanitiseURL(url)
             res.sendStatus(204);
             const alreadyVisited = [];
             let current = [url];
 
+            // Pre-fetch
+            if(options.sitemap) {
+                let sitemap = await fetchUrlsFromSitemap(url);
+                (sitemap.length > 0)? current.push(...sitemap): null;
+                console.log("The sitemap contains %d URLs", sitemap.length)
+            }
+
             while (current.length > 0 && alreadyVisited.length < MAX_PAGES) {
                 for (let i = 0; i < threadCount - 1; i++) {
-                    const linksToVisit = current.splice(0, 5).filter(link => !alreadyVisited.find(l => l.url === link));
+                    const linksToVisit = current.splice(0, 5).filter(link => !alreadyVisited.find(l => l.url === link) && robots.canCrawlSync(link));
 
                     if (linksToVisit.length > 0) {
                         console.log("Links To Visit: ");
@@ -101,7 +114,7 @@ app.post("/crawl", async (req, res) => {
 
                         console.log("Already visited: ");
                         console.table(alreadyVisited)
-                        if (visited && visited.hasOwnProperty("links") && visited.links.length > 0)
+                        if (visited && visited.hasOwnProperty("links") && visited.links.length > 0 && !options.sitemap)
                             current.push(...visited.links)
 
                         current = Array.from(new Set(current));
@@ -114,7 +127,7 @@ app.post("/crawl", async (req, res) => {
                     console.log("Task Completed 🎉")
                     if (alreadyVisited.length > 0) {
                         // fs.writeFileSync("output.json", JSON.stringify(alreadyVisited, null, 2));
-                        await insertNodes(alreadyVisited)
+                        await insertNodes(alreadyVisited.filter((p) => Object.keys(p).length > 0))
                     } else
                         console.log("Empty Array");
                     break;
@@ -123,5 +136,30 @@ app.post("/crawl", async (req, res) => {
         }
     } catch (err) {
         console.error("Task Failed: " + err.message);
+    }
+})
+
+app.get("/search", async (req, res) => {
+    const query = req.query.q;
+
+    try {
+        if(!query) {
+            res.status(400).send({
+                error: "Search Query missing",
+                success: false
+            })
+        } else {
+            res.status(200).send({
+                success: true,
+                results: await getSearchResults(query)
+            })
+        }
+    } catch(err) {
+        if(err) {
+            res.status(500).send({
+                error: err.message,
+                success: false
+            })
+        }
     }
 })

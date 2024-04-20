@@ -2,7 +2,6 @@ const {
     NodeHtmlMarkdown
 } = require('node-html-markdown');
 const puppeteer = require('puppeteer');
-const fs = require("node:fs")
 const {
     ChatGoogleGenerativeAI,
     GoogleGenerativeAIEmbeddings
@@ -16,6 +15,13 @@ const {
 const {
     RecursiveCharacterTextSplitter
 } = require('langchain/text_splitter')
+const Sitemapper = require('sitemapper');
+const sitemapper = new Sitemapper();
+const robotsParser = require('robots-txt-parser');
+const robots = robotsParser({
+    userAgent: 'Googlebot', // The default user agent to use when looking for allow/disallow rules, if this agent isn't listed in the active robots.txt, we use *.
+    allowOnNeutral: false // The value to use when the robots.txt rule's for allow and disallow are balanced on whether a link can be crawled.
+});
 
 require("dotenv").config()
 
@@ -40,6 +46,24 @@ class Webpage {
     keywords = [];
     embeddings = [];
     summary = "";
+}
+
+async function fetchUrlsFromSitemap(url) {
+    try {
+        sitemapper.timeout = 60 * 1000;
+        let sitemap = sitemapper.fetch(url + '/sitemap.xml')
+            .then(({
+                url,
+                sites
+            }) => sites)
+            .catch(err => {
+                throw err
+            })
+
+        return sitemap
+    } catch (err) {
+        throw err;
+    }
 }
 
 const covertHtmlToMd = (html) => {
@@ -117,7 +141,7 @@ const processPage = async (text) => {
             summary
         }
     } catch (err) {
-        throw err;
+        throw err.message;
     }
 }
 
@@ -126,7 +150,7 @@ const statusCode = async (url) => {
     return res.status;
 }
 
-function processURL(url) {
+function sanitiseURL(url) {
     let t = new URL(url);
     let u = `${t.protocol}//${t.hostname}${(t.port)? `:${t.port}`: ""}${t.pathname}`
 
@@ -136,7 +160,7 @@ function processURL(url) {
 const visitPage = async (url) => {
     const browser = await puppeteer.launch({
         args: ['--no-sandbox'],
-        headless: false
+        headless: "new"
     })
     try {
         const page = await browser.newPage();
@@ -146,7 +170,7 @@ const visitPage = async (url) => {
         const content = await page.evaluate(() => document.body.innerHTML);
         const webpage = new Webpage();
         const status = await statusCode(url);
-        webpage.url = processURL(url);
+        webpage.url = sanitiseURL(url);
         webpage.status = status;
 
         const hostname = new URL(url).hostname;
@@ -169,7 +193,7 @@ const visitPage = async (url) => {
             }, body)
 
             // Secondary Processing
-            webpage.links = Array.from(new Set(links.map(link => processURL(link)).filter((link) => link.includes(hostname) == true)));
+            webpage.links = Array.from(new Set(links.map(link => sanitiseURL(link)).filter((link) => link.includes(hostname) == true)));
 
             await browser.close();
 
@@ -192,19 +216,13 @@ const visitPage = async (url) => {
     }
 }
 
-const main = async () => {
-    let t1 = performance.now();
-    const data = await visitPage("https://google.com/");
-    let t2 = performance.now();
-    console.log("Total Execution Time: %d ms", t2 - t1)
-    fs.writeFileSync("output.json", JSON.stringify(data, null, 2))
-}
-
-// main();
-
 module.exports = {
     visitPage,
     covertHtmlToMd,
     Webpage,
-    processURL
+    sanitiseURL,
+    model,
+    embeddings,
+    fetchUrlsFromSitemap,
+    robots
 }

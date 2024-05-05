@@ -2,6 +2,7 @@ const {
     NodeHtmlMarkdown
 } = require('node-html-markdown');
 const puppeteer = require('puppeteer');
+
 const {
     ChatGoogleGenerativeAI,
     GoogleGenerativeAIEmbeddings
@@ -15,6 +16,17 @@ const {
 const {
     RecursiveCharacterTextSplitter
 } = require('langchain/text_splitter')
+const {
+    RunnableWithMessageHistory
+} = require("@langchain/core/runnables")
+const {
+    UpstashRedisChatMessageHistory
+} = require("@langchain/community/stores/message/upstash_redis");
+const {
+    ChatPromptTemplate,
+    MessagesPlaceholder,
+} = require("@langchain/core/prompts");
+
 const Sitemapper = require('sitemapper');
 const sitemapper = new Sitemapper();
 const robotsParser = require('robots-txt-parser');
@@ -22,6 +34,10 @@ const robots = robotsParser({
     userAgent: 'Googlebot', // The default user agent to use when looking for allow/disallow rules, if this agent isn't listed in the active robots.txt, we use *.
     allowOnNeutral: false // The value to use when the robots.txt rule's for allow and disallow are balanced on whether a link can be crawled.
 });
+
+const {
+    client
+} = require("./cache")
 
 require("dotenv").config()
 
@@ -125,7 +141,7 @@ const processPage = async (text) => {
 
         // Generating a summary
         const chain = loadSummarizationChain(model, {
-            type: "map_reduce"
+            type: "stuff"
         })
 
         const summary = (await chain.call({
@@ -216,6 +232,92 @@ const visitPage = async (url) => {
     }
 }
 
+async function getWebsiteContent(url) {
+    const browser = await puppeteer.launch({
+        args: ['--no-sandbox'],
+        headless: "new"
+    })
+    try {
+        const page = await browser.newPage();
+        await page.goto(url, {
+            waitUntil: "networkidle0"
+        });
+        const content = await page.evaluate(() => document.body.innerHTML);
+        let pageContent = covertHtmlToMd(content);
+        return pageContent;
+    } catch (err) {
+        if (err)
+            throw err
+    } finally {
+        await browser.close();
+    }
+}
+
+async function generativeAISearchResults(query, sources, continuedConversation = false, sessionId = "foobarz") {
+    try {
+        let context;
+        if (!continuedConversation) {
+            context = await Promise.all(sources.map(async sr => {
+                return ({
+                    url: sr.url,
+                    title: sr.title,
+                    content: ((await client.exists(sr.url)) ? await client.get(sr.url) : await getWebsiteContent(sr.url).then(content => {
+                        client.set(sr.url, content, {
+                            EX: 60 * 5
+                        });
+                        return content;
+                    }))
+                })
+            }));
+        }
+
+        const prompt = `
+        ${!continuedConversation? `
+        SYSTEM: As a knowledgeable question-answering AI, you can utilize the markdown content from various websites which is provided as your context to provide relevant and descriptive and elaborate answers to the user's queries. 
+                By analyzing the information provided in the content, you can generate accurate responses tailored to your needs.`: ""}
+        QUERY: {query}
+
+        ${!continuedConversation? 
+        `CONTEXT
+        ------
+        ${context.map((c, i) => `Website ${i+1} (${c.title} - ${c.url}): \n${c.content}`).join("\n")}`: ""}
+        `
+        console.log(prompt.trim())
+        const chatPrompt = ChatPromptTemplate.fromMessages([
+            new MessagesPlaceholder("history"),
+            ["human", prompt.trim()]
+        ]);
+
+        const chain = chatPrompt.pipe(model);
+        const chainWithHistory = new RunnableWithMessageHistory({
+            runnable: chain,
+            getMessageHistory: (sessionId) =>
+                new UpstashRedisChatMessageHistory({
+                    sessionId,
+                    sessionTTL: 300,
+                    config: {
+                        url: process.env.UPSTASH_REDIS_HOST,
+                        token: process.env.UPSTASH_REDIS_TOKEN,
+                    },
+                }),
+            inputMessagesKey: "query",
+            historyMessagesKey: "history"
+        });
+
+        const res = (await chainWithHistory.invoke({
+            query
+        }, {
+            configurable: {
+                sessionId: sessionId
+            }
+        })).content;
+
+        return res;
+    } catch (err) {
+        throw err;
+    }
+}
+
 module.exports = {
     visitPage,
     covertHtmlToMd,
@@ -224,5 +326,6 @@ module.exports = {
     model,
     embeddings,
     fetchUrlsFromSitemap,
-    robots
+    robots,
+    generativeAISearchResults
 }

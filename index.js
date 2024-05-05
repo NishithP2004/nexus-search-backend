@@ -1,4 +1,8 @@
 const express = require("express")
+const http = require('http')
+const {
+    instrument
+} = require("@socket.io/admin-ui");
 require("dotenv").config();
 const {
     Worker
@@ -6,8 +10,9 @@ const {
 const os = require("node:os");
 const {
     sanitiseURL,
-    fetchUrlsFromSitemap, 
-    robots
+    fetchUrlsFromSitemap,
+    robots,
+    generativeAISearchResults
 } = require("./utils");
 // const fs = require("node:fs")
 const {
@@ -25,7 +30,20 @@ const PORT = process.env.PORT || 3000;
 const threadCount = process.env.THREADS || os.availableParallelism();
 var threads = new Set();
 
-app.listen(PORT, () => {
+const server = http.createServer(app);
+
+const io = require("socket.io")(server, {
+    cors: ["https://admin.socket.io"],
+    credentials: true,
+    maxHttpBufferSize: 1e8,
+});
+
+instrument(io, {
+    mode: "development",
+    auth: false,
+});
+
+server.listen(PORT, () => {
     console.log(`Listening on port: ${PORT}`);
 })
 
@@ -88,9 +106,9 @@ app.post("/crawl", async (req, res) => {
             let current = [url];
 
             // Pre-fetch
-            if(options.sitemap) {
+            if (options.sitemap == "true") {
                 let sitemap = await fetchUrlsFromSitemap(url);
-                (sitemap.length > 0)? current.push(...sitemap): null;
+                (sitemap.length > 0) ? current.push(...sitemap): null;
                 console.log("The sitemap contains %d URLs", sitemap.length)
             }
 
@@ -105,7 +123,7 @@ app.post("/crawl", async (req, res) => {
                             linksToVisit
                         })
 
-                        if (!alreadyVisited.find(page => page.url === visited.url) && typeof visited === 'object' && visited?.success === true) {
+                        if (!alreadyVisited.find(page => page.url === visited.url) && typeof visited === 'object' && visited ?.success === true) {
                             console.log("Visited Links: ");
                             delete visited.success;
                             console.log(visited)
@@ -114,7 +132,7 @@ app.post("/crawl", async (req, res) => {
 
                         console.log("Already visited: ");
                         console.table(alreadyVisited)
-                        if (visited && visited.hasOwnProperty("links") && visited.links.length > 0 && !options.sitemap)
+                        if (visited && visited.hasOwnProperty("links") && visited.links.length > 0 && options.sitemap == false)
                             current.push(...visited.links)
 
                         current = Array.from(new Set(current));
@@ -125,6 +143,9 @@ app.post("/crawl", async (req, res) => {
 
                 if (current.length === 0 || alreadyVisited.length >= MAX_PAGES || threads.size == 0) {
                     console.log("Task Completed 🎉")
+                    // Terminate all active worker threads
+                    threads.forEach(worker => worker.terminate());
+                    threads.clear(); // Clear the Set of workers
                     if (alreadyVisited.length > 0) {
                         // fs.writeFileSync("output.json", JSON.stringify(alreadyVisited, null, 2));
                         await insertNodes(alreadyVisited.filter((p) => Object.keys(p).length > 0))
@@ -143,23 +164,49 @@ app.get("/search", async (req, res) => {
     const query = req.query.q;
 
     try {
-        if(!query) {
+        if (!query) {
             res.status(400).send({
                 error: "Search Query missing",
                 success: false
             })
         } else {
+            let search_results = await getSearchResults(query);
+            let sources = search_results.slice(0, 1);
+            let answer = await generativeAISearchResults(query, sources, false);
             res.status(200).send({
                 success: true,
-                results: await getSearchResults(query)
+                answer: answer,
+                results: search_results
             })
         }
-    } catch(err) {
-        if(err) {
+    } catch (err) {
+        if (err) {
             res.status(500).send({
                 error: err.message,
                 success: false
             })
         }
     }
+})
+
+io.on('connection', (client) => {
+    console.log(`Connected to ${client.id}`);
+
+    client.on("user-message", async data => {
+        try {
+            // Chat using Message History
+            let answer = await generativeAISearchResults(data.query, data.hasOwnProperty(sources)? data.sources: null, true, data.sessionId);
+            io.to(client.id).emit("bot-response", ({
+                answer,
+                success: true
+            }))
+        } catch (err) {
+            if (err) {
+                io.to(client.id).emit("bot-response", ({
+                    answer: err.message,
+                    success: false
+                }))
+            }
+        }
+    })
 })

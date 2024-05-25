@@ -253,42 +253,48 @@ async function getWebsiteContent(url) {
     }
 }
 
-async function generativeAISearchResults(query, sources, continuedConversation = false, sessionId = "foobarz") {
+async function generativeAISearchResults(query, sources, sessionId = "foobarz") {
     try {
         let context;
-        if (!continuedConversation) {
-            context = await Promise.all(sources.map(async sr => {
-                return ({
-                    url: sr.url,
-                    title: sr.title,
-                    content: ((await client.exists(sr.url)) ? await client.get(sr.url) : await getWebsiteContent(sr.url).then(content => {
-                        client.set(sr.url, content, {
-                            EX: 60 * 5
-                        });
-                        return content;
-                    }))
-                })
-            }));
-        }
+        context = (sources && sources.length > 0)? (await Promise.all(sources.map(async sr => {
+            return ({
+                url: sr.url,
+                title: sr.title,
+                summary: sr.summary,
+                content: ((await client.exists(sr.url)) ? await client.get(sr.url) : await getWebsiteContent(sr.url).then(content => {
+                    client.set(sr.url, content, {
+                        EX: 60 * 5
+                    });
+                    return content;
+                }))
+            })
+        }))) : null;
 
         const prompt = `
-        ${!continuedConversation? `
         SYSTEM: As a knowledgeable question-answering AI, you can utilize the markdown content from various websites which is provided as your context to provide relevant and descriptive and elaborate answers to the user's queries. 
-                By analyzing the information provided in the content, you can generate accurate responses tailored to your needs.`: ""}
+                By analyzing the information provided in the content, you can generate accurate responses tailored to your needs.
         QUERY: {query}
 
-        ${!continuedConversation? 
-        `CONTEXT
-        ------
-        ${context.map((c, i) => `Website ${i+1} (${c.title} - ${c.url}): \n${c.content}`).join("\n")}`: ""}
+        
+        ${context? 
+            `CONTEXT
+            ------
+            ${context.map((c, i) => `Website ${i+1} (${c.title} - ${c.url}): \nSite Summary: ${c.summary} \n${c.content}`).join("\n")}`: ""
+        }
         `
+
         console.log(prompt.trim())
         const chatPrompt = ChatPromptTemplate.fromMessages([
             new MessagesPlaceholder("history"),
             ["human", prompt.trim()]
         ]);
 
-        const chain = chatPrompt.pipe(model);
+        const chain = chatPrompt.pipe(new ChatGoogleGenerativeAI({
+            modelName: "gemini-1.5-flash", 
+            apiKey: process.env.GEMINI_API_KEY,
+            temperature: 0.7
+        }));
+
         const chainWithHistory = new RunnableWithMessageHistory({
             runnable: chain,
             getMessageHistory: (sessionId) =>

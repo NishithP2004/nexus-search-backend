@@ -162,6 +162,15 @@ app.post("/crawl", async (req, res) => {
 
 app.get("/search", async (req, res) => {
     const query = req.query.q;
+    const cookies = req.headers['cookie']
+    .split(";")
+    .filter(c => c.trim() !== '') 
+    .reduce((p, c) => {
+        let [key, value] = c.split("=");
+        p[key.trim()] = value ? value.trim() : '';
+        return p; 
+    }, {});
+    console.log("session: " + cookies.session)
 
     try {
         if (!query) {
@@ -171,11 +180,9 @@ app.get("/search", async (req, res) => {
             })
         } else {
             let search_results = await getSearchResults(query);
-            let sources = search_results.slice(0, 1);
-            let answer = await generativeAISearchResults(query, sources, false);
+
             res.status(200).send({
                 success: true,
-                answer: answer,
                 results: search_results
             })
         }
@@ -195,7 +202,7 @@ io.on('connection', (client) => {
     client.on("user-message", async data => {
         try {
             // Chat using Message History
-            let answer = await generativeAISearchResults(data.query, data.hasOwnProperty(sources)? data.sources: null, true, data.sessionId);
+            let answer = await generativeAISearchResults(data.query, data.sources, data.session);
             io.to(client.id).emit("bot-response", ({
                 answer,
                 success: true

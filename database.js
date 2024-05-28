@@ -17,31 +17,38 @@ const session = driver.session()
 
 const CYPHER_INSERT_QUERY =
     `
-UNWIND $webpages AS webpage
-CREATE (w:Webpage {
-    url: webpage.url,
-    status: webpage.status,
-    title: webpage.title,
-    is_404: webpage.is_404,
-    keywords: webpage.keywords,
-    embeddings: webpage.embeddings,
-    summary: webpage.summary
-})
+    UNWIND $webpages AS webpage
 
-WITH w, webpage
-UNWIND webpage.links AS link
-MERGE (l:Webpage {url: link})
-MERGE (w)-[:LINKS_TO]->(l)
-
-WITH w, webpage
-UNWIND webpage.redirects AS redirect
-MERGE (r:Webpage {url: redirect})
-MERGE (w)-[:REDIRECTS_TO]->(r)
-
-WITH w, webpage
-UNWIND w.keywords AS keyword
-MERGE (k:Keyword { keyword: keyword })
-MERGE (w)-[:HAS_KEYWORD]->(k)
+    MERGE (w:Webpage {url: webpage.url})
+    ON CREATE SET 
+        w.status = webpage.status,
+        w.title = webpage.title,
+        w.is_404 = webpage.is_404,
+        w.keywords = webpage.keywords,
+        w.embeddings = webpage.embeddings,
+        w.summary = webpage.summary
+    ON MATCH SET 
+        w.status = webpage.status,
+        w.title = webpage.title,
+        w.is_404 = webpage.is_404,
+        w.keywords = webpage.keywords,
+        w.embeddings = webpage.embeddings,
+        w.summary = webpage.summary
+    
+    WITH w, webpage
+    UNWIND webpage.links AS link
+    MERGE (l:Webpage {url: link})
+    MERGE (w)-[:LINKS_TO]->(l)
+    
+    WITH w, webpage
+    UNWIND webpage.redirects AS redirect
+    MERGE (r:Webpage {url: redirect})
+    MERGE (w)-[:REDIRECTS_TO]->(r)
+    
+    WITH w, webpage
+    UNWIND webpage.keywords AS keyword
+    MERGE (k:Keyword { keyword: keyword })
+    MERGE (w)-[:HAS_KEYWORD]->(k)
 `;
 
 /* const CYPHER_KEYWORD_OR_TITLE_SEARCH_QUERY =

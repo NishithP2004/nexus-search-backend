@@ -51,12 +51,33 @@ const CYPHER_INSERT_QUERY =
     MERGE (w)-[:HAS_KEYWORD]->(k)
 `;
 
-/* const CYPHER_KEYWORD_OR_TITLE_SEARCH_QUERY =
+const CYPHER_KEYWORD_SEARCH_QUERY =
     `
-MATCH (n)
-  WHERE ANY(keyword IN n.keywords WHERE keyword IN $keywords)
-  OR ANY(keyword IN $keywords WHERE n.title CONTAINS keyword)
-  RETURN n LIMIT 5
+    WITH $keywords AS keywords
+    MATCH (w:Webpage)
+    WHERE 
+      ANY(keyword IN keywords WHERE 
+        toLower(w.title) CONTAINS toLower(keyword) OR 
+        ANY(k IN w.keywords WHERE toLower(k) CONTAINS toLower(keyword)) OR 
+        toLower(w.summary) CONTAINS toLower(keyword)
+      )
+    WITH w, keywords,
+      REDUCE(score = 0, keyword IN keywords | 
+        score +
+        CASE 
+          WHEN toLower(w.title) CONTAINS toLower(keyword) THEN 1 ELSE 0 
+        END +
+        CASE 
+          WHEN ANY(k IN w.keywords WHERE toLower(k) CONTAINS toLower(keyword)) THEN 1 ELSE 0 
+        END +
+        CASE 
+          WHEN toLower(w.summary) CONTAINS toLower(keyword) THEN 1 ELSE 0 
+        END
+      ) AS score
+    RETURN w, score
+    ORDER BY score DESC
+    LIMIT 10
+    
 `
 
 async function extract_keywords(text) {
@@ -90,16 +111,17 @@ async function extract_keywords(text) {
 
 async function keywordBasedSearch(keywords) {
     let records = session
-        .run(CYPHER_KEYWORD_OR_TITLE_SEARCH_QUERY, {
+        .run(CYPHER_KEYWORD_SEARCH_QUERY, {
             keywords: keywords
         })
         .then(result => {
-            const records = result.records?.map(record => record.toObject().n.properties) || [];
-            return records.slice(0, Math.min(5, records.length)).map(record => {
+            const records = result.records?.map(record => record.toObject().w.properties) || [];
+            return records.map(record => { 
                 return {
                     url: record.url,
                     title: record.title,
-                    summary: record.summary
+                    summary: record.summary,
+                    favicon: `https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=${record.url}&size=64`,
                 }
             })
         })
@@ -109,7 +131,7 @@ async function keywordBasedSearch(keywords) {
         })
 
     return records
-} */
+} 
 
 async function insertNodes(nodes) {
     session
@@ -133,7 +155,7 @@ function convertDocPageContentToJSON(pageContent, score) {
         url: matches[0].trim(),
         title: matches[1].slice(0, matches[1].lastIndexOf("\nsummary: ")).replaceAll("\n", ""),
         summary: matches[1].slice(matches[1].lastIndexOf("\nsummary: ") + 9).trim().replaceAll("\n", ""),
-        keywords: matches[2].slice(1),
+        // keywords: matches[2].slice(1),
         favicon: `https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=${matches[0].trim()}&size=64`,
         score: score
     }
@@ -141,7 +163,10 @@ function convertDocPageContentToJSON(pageContent, score) {
 }
 async function getSearchResults(query) {
     try {
+        let response = {}
+        let t1, t2, t3, t4;
         // Stage 1
+        t1 = performance.now();
         const neo4jVectorIndex = await Neo4jVectorStore.fromExistingGraph(embeddings, {
             url: URI,
             username: USERNAME,
@@ -151,6 +176,7 @@ async function getSearchResults(query) {
             searchType: 'vector',
             textNodeProperties: ["url", "title", "summary", "keywords"]
         })
+        t2 = performance.now();
 
         const results = [];
 
@@ -158,17 +184,22 @@ async function getSearchResults(query) {
             return convertDocPageContentToJSON(doc[0].pageContent, doc[1])
         }))
 
-        /* // Stage 2
+        // Stage 2
+        t3 = performance.now();
         let keywords = await extract_keywords(query);
         if (keywords.length > 0) {
             let records = await keywordBasedSearch(keywords);
-            (records.length > 0) ? results.push(...records): null;
+            response["keywords"] = keywords
+            response["keyword_search"] = records
         }
-
-        let uniqUrls = new Set(results.map(r => r.url));
-        return Array.from(uniqUrls).map(u => results.find(r => r.url === u)) */
+        t4 = performance.now();
         
-        return results
+        response["semantic_keyword_search"] = results
+        response["performance"] = {
+            "semantic_keyword_search": t2-t1,
+            "keyword_search": t4-t3
+        }
+        return response
     } catch (err) {
         throw err;
     }

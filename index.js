@@ -1,24 +1,25 @@
-const express = require("express")
-const http = require('http')
-const {
+import express from "express"
+import http from 'http'
+import {
     instrument
-} = require("@socket.io/admin-ui");
-require("dotenv").config();
-const {
+} from "@socket.io/admin-ui";
+import { Server } from "socket.io"
+import "dotenv/config";
+import {
     Worker
-} = require("node:worker_threads");
-const os = require("node:os");
-const {
+} from "node:worker_threads";
+import os from "node:os";
+import {
     sanitiseURL,
     fetchUrlsFromSitemap,
     robots,
     generativeAISearchResults
-} = require("./utils");
-// const fs = require("node:fs")
-const {
+} from "./utils.js";
+
+import {
     insertNodes,
     getSearchResults
-} = require("./database")
+} from "./services/neo4j.js"
 
 const app = express();
 app.use(express.json())
@@ -32,7 +33,7 @@ var threads = new Set();
 
 const server = http.createServer(app);
 
-const io = require("socket.io")(server, {
+const io = new Server(server, {
     cors: ["https://admin.socket.io"],
     credentials: true,
     maxHttpBufferSize: 1e8,

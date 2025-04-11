@@ -1,13 +1,13 @@
-const neo4j = require('neo4j-driver');
-const {
+import neo4j from 'neo4j-driver';
+import {
     Neo4jVectorStore
-} = require("@langchain/community/vectorstores/neo4j_vector")
+} from "@langchain/community/vectorstores/neo4j_vector"
 
-const {
+import {
     model,
     embeddings
-} = require('./utils')
-require("dotenv").config()
+} from '../utils.js'
+import "dotenv/config"
 
 const URI = process.env.NEO4J_URI
 const USERNAME = process.env.NEO4J_USERNAME
@@ -205,7 +205,7 @@ async function getSearchResults(query) {
     }
 }
 
-module.exports = {
+export {
     driver,
     insertNodes,
     getSearchResults

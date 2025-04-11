@@ -1,11 +1,11 @@
-const {
+import {
   Worker,
   isMainThread,
   parentPort,
   workerData,
-} = require("worker_threads");
-const { visitPage } = require("./utils");
-require("dotenv").config();
+} from "worker_threads";
+import { visitPage } from "./utils,js";
+import "dotenv/config"
 
 if (!isMainThread) {
   (async function crawl() {

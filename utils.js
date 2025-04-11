@@ -1,45 +1,44 @@
-const {
+import {
     NodeHtmlMarkdown
-} = require('node-html-markdown');
-const puppeteer = require('puppeteer');
+} from 'node-html-markdown';
+import puppeteer from 'puppeteer';
 
-const {
+import {
     ChatGoogleGenerativeAI,
     GoogleGenerativeAIEmbeddings
-} = require("@langchain/google-genai");
-const {
+} from "@langchain/google-genai";
+import {
     loadSummarizationChain
-} = require("langchain/chains")
-const {
+} from "langchain/chains"
+import {
     Document
-} = require('langchain/document');
-const {
+} from 'langchain/document';
+import {
     RecursiveCharacterTextSplitter
-} = require('langchain/text_splitter')
-const {
+} from 'langchain/text_splitter'
+import {
     RunnableWithMessageHistory
-} = require("@langchain/core/runnables")
-const {
+} from "@langchain/core/runnables"
+import {
     UpstashRedisChatMessageHistory
-} = require("@langchain/community/stores/message/upstash_redis");
-const {
+} from "@langchain/community/stores/message/upstash_redis"
+import {
     ChatPromptTemplate,
     MessagesPlaceholder,
-} = require("@langchain/core/prompts");
+} from "@langchain/core/prompts"
 
-const Sitemapper = require('sitemapper');
+import Sitemapper from 'sitemapper'
 const sitemapper = new Sitemapper();
-const robotsParser = require('robots-txt-parser');
+import robotsParser from 'robots-txt-parser';
 const robots = robotsParser({
     userAgent: 'Googlebot', // The default user agent to use when looking for allow/disallow rules, if this agent isn't listed in the active robots.txt, we use *.
     allowOnNeutral: false // The value to use when the robots.txt rule's for allow and disallow are balanced on whether a link can be crawled.
 });
 
-const {
-    client
-} = require("./cache")
-
-require("dotenv").config()
+import {
+    client as redis
+} from "./services/redis.js"
+import "dotenv/config"
 
 const model = new ChatGoogleGenerativeAI({
     modelName: "gemini-pro",
@@ -261,8 +260,8 @@ async function generativeAISearchResults(query, sources, sessionId = "foobarz") 
                 url: sr.url,
                 title: sr.title,
                 summary: sr.summary,
-                content: ((await client.exists(sr.url)) ? await client.get(sr.url) : await getWebsiteContent(sr.url).then(content => {
-                    client.set(sr.url, content, {
+                content: ((await redis.exists(sr.url)) ? await redis.get(sr.url) : await getWebsiteContent(sr.url).then(content => {
+                    redis.set(sr.url, content, {
                         EX: 60 * 5
                     });
                     return content;
@@ -324,7 +323,7 @@ async function generativeAISearchResults(query, sources, sessionId = "foobarz") 
     }
 }
 
-module.exports = {
+export {
     visitPage,
     covertHtmlToMd,
     Webpage,

@@ -1,5 +1,7 @@
-const { createClient } = require("redis");
-require('dotenv').config();
+import {
+    createClient
+} from "redis";
+import "dotenv/config"
 
 const client = createClient({
     password: process.env.REDIS_PASSWORD,
@@ -10,10 +12,10 @@ const client = createClient({
     }
 });
 
-(async function() {
-    await client.connect();
-})();
+client.connect()
+    .then(() => console.log("Connected to Redis successfully."))
+    .catch(err => console.error)
 
-module.exports = {
+export {
     client
 }

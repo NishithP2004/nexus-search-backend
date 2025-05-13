@@ -4,11 +4,11 @@ import {
   parentPort,
   workerData,
 } from "worker_threads";
-import { visitPage } from "./utils,js";
+import { visitPage } from "./utils.js";
 import "dotenv/config"
 
 if (!isMainThread) {
-  (async function crawl() {
+  (async function() {
     const { linksToVisit } = workerData;
 
     for (let link of linksToVisit) {

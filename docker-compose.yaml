@@ -1,0 +1,17 @@
+services:
+    nexus-search-backend:
+      image: nishithp/nexus-search-backend
+      build: .
+      restart: unless-stopped
+      env_file: .env
+      ports: 
+        - "3000:3000"
+      depends_on:
+        - kafka
+    
+    kafka:
+      image: apache/kafka
+      restart: unless-stopped
+      ports:
+        - "9092:9092"
+      

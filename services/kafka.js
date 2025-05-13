@@ -18,7 +18,7 @@ const consumer = kafka.consumer({
     groupId: "nexus-consumer-group-0"
 })
 
-const topics = ["web_crawl"]
+const topics = ["init_crawl", "crawl_links", "crawl_links_batch", "insert_nodes"]
 
 async function sendMessage(message) {
     const {

@@ -3,10 +3,10 @@ import {
 } from 'node-html-markdown';
 import puppeteer from 'puppeteer';
 
-import {
+/* import {
     ChatGoogleGenerativeAI,
     GoogleGenerativeAIEmbeddings
-} from "@langchain/google-genai";
+} from "@langchain/google-genai"; */
 import {
     loadSummarizationChain
 } from "langchain/chains"
@@ -26,6 +26,8 @@ import {
     ChatPromptTemplate,
     MessagesPlaceholder,
 } from "@langchain/core/prompts"
+import { Ollama, OllamaEmbeddings } from "@langchain/ollama"
+import { client as redis } from "./services/redis.js"
 
 import Sitemapper from 'sitemapper'
 const sitemapper = new Sitemapper();
@@ -40,15 +42,26 @@ import {
 } from "./services/redis.js"
 import "dotenv/config"
 
-const model = new ChatGoogleGenerativeAI({
-    modelName: "gemini-pro",
+/* const model = new ChatGoogleGenerativeAI({
+    model: "gemini-pro",
     apiKey: process.env.GEMINI_API_KEY,
     temperature: 0.7
-});
+}); */
 
-const embeddings = new GoogleGenerativeAIEmbeddings({
-    modelName: "embedding-001",
+const model = new Ollama({
+    baseUrl: process.env["OLLAMA_HOST"],
+    model: "gemma3:4b",
+    numCtx: 1024 * 32 // 32k Context Window
+})
+
+/* const embeddings = new GoogleGenerativeAIEmbeddings({
+    model: "embedding-001",
     apiKey: process.env.GEMINI_API_KEY
+}) */
+
+const embeddings = new OllamaEmbeddings({
+    baseUrl: process.env["OLLAMA_HOST"],
+    model: "nomic-embed-text"
 })
 
 class Webpage {
@@ -62,6 +75,8 @@ class Webpage {
     embeddings = [];
     summary = "";
 }
+
+let browser = null;
 
 async function fetchUrlsFromSitemap(url) {
     try {
@@ -93,19 +108,18 @@ async function extract_keywords(documents) {
         for (let document of documents) {
             try {
                 let prompt = `
-                    SYSTEM: You are an intelligent Web Crawler bot which can extract the essential keywords from a given text which represents the website content and return the same as a comma separated list.
+                        You are an intelligent Web Crawler bot which can extract the essential keywords from a given text which represents the website content and return the same as a comma separated list.
                         For example, 
                         input: Broadcom agreed to acquire cloud computing company VMware in a $61 billion (€57bn) cash-and stock deal.
                         output: cloud computing, broadcom, vmware
 
                         The output format will always be keyword1, keyword2, ...
-
-                    INPUT TEXT: ${document.pageContent}
             `
 
                 let res = (await model.invoke([
-                    ["human", prompt]
-                ])).content;
+                    ["system", prompt],
+                    ["human", document.pageContent]
+                ]));
                 let k = res.split(",").map(keyword => keyword.trim())
                 keywords.push(...k);
             } catch (err) {
@@ -143,7 +157,7 @@ const processPage = async (text) => {
             type: "stuff"
         })
 
-        const summary = (await chain.call({
+        const summary = (await chain.invoke({
             input_documents: documents
         })).text
 
@@ -173,10 +187,14 @@ function sanitiseURL(url) {
 }
 
 const visitPage = async (url) => {
-    const browser = await puppeteer.launch({
-        args: ['--no-sandbox'],
-        headless: "new"
-    })
+    if(!browser) {
+        browser = await puppeteer.launch({
+            args: ['--no-sandbox'],
+            headless: "new",
+            executablePath: "/usr/bin/chromium"
+        })
+    }
+
     try {
         const page = await browser.newPage();
         await page.goto(url, {
@@ -227,8 +245,12 @@ const visitPage = async (url) => {
         if (err)
             throw err
     } finally {
-        await browser.close();
+        // await browser.close();
     }
+}
+
+async function killBrowser() {
+    await browser.close()
 }
 
 async function getWebsiteContent(url) {
@@ -288,11 +310,11 @@ async function generativeAISearchResults(query, sources, sessionId = "foobarz") 
             ["human", prompt.trim()]
         ]);
 
-        const chain = chatPrompt.pipe(new ChatGoogleGenerativeAI({
+        const chain = chatPrompt.pipe(/* new ChatGoogleGenerativeAI({
             modelName: "gemini-1.5-flash", 
             apiKey: process.env.GEMINI_API_KEY,
             temperature: 0.7
-        }));
+        }) */ model);
 
         const chainWithHistory = new RunnableWithMessageHistory({
             runnable: chain,
@@ -323,6 +345,21 @@ async function generativeAISearchResults(query, sources, sessionId = "foobarz") 
     }
 }
 
+async function updateTask(taskId, status="started") {
+    return redis.hSet(`task:${hash}`, {
+        status,
+        lastModified: new Date().getTime()
+    })
+}
+
+async function sleep(delay=1) {
+    return new Promise((resolve, reject) => {
+        setTimeout(() => {
+            resolve()
+        }, delay * 1000)
+    })
+}
+
 export {
     visitPage,
     covertHtmlToMd,
@@ -332,5 +369,7 @@ export {
     embeddings,
     fetchUrlsFromSitemap,
     robots,
-    generativeAISearchResults
+    generativeAISearchResults,
+    updateTask,
+    sleep
 }

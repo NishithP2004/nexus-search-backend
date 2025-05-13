@@ -83,13 +83,14 @@ async function extract_keywords(text) {
                         output: cloud computing, broadcom, vmware
 
                         The output format will always be keyword1, keyword2, ...
-
-                    INPUT TEXT: ${text}
+                        STRICTLY ADHERE TO THE OUTPUT FORMAT AND ONLY RETURN A COMMA SEPARATED VALUE AS SHOWN BELOW:
+                        keyword1, keyword2, ...
             `
 
         let res = (await model.invoke([
-            ["human", prompt]
-        ])).content;
+            ["system", prompt],
+            ["human", text]
+        ]));
 
         let k = res.split(",").map(keyword => keyword.trim())
         keywords.push(...k);
@@ -163,7 +164,7 @@ async function getSearchResults(query) {
             url: URI,
             username: USERNAME,
             password: PASSWORD,
-            indexName: "webpage-embeddings",
+            indexName: "webpage_embeddings",
             embeddingNodeProperty: "embeddings",
             searchType: 'vector',
             textNodeProperties: ["url", "title", "summary", "keywords"]
@@ -191,6 +192,8 @@ async function getSearchResults(query) {
             "semantic_keyword_search": t2-t1,
             "keyword_search": t4-t3
         }
+
+        console.log(response)
         return response
     } catch (err) {
         throw err;

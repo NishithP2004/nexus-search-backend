@@ -9,7 +9,6 @@ import {
     sanitiseURL,
     fetchUrlsFromSitemap,
     robots,
-    updateTask,
     sleep
 } from "./utils.js";
 
@@ -40,7 +39,8 @@ function createWorkerPromise(workerData) {
         worker.on('message', (msg) => {
             if (msg.success) {
                 console.log("Visited: " + msg.url);
-                visitedNodes.push(msg)
+                if(msg && msg.url) 
+                    visitedNodes.push(msg);
             } else {
                 console.error("Error: " + msg.error);
             }
@@ -71,14 +71,14 @@ async function handleMessage(topic, data) {
 
         if (options.sitemap == "true") {
             let sitemap = await fetchUrlsFromSitemap(sanitisedUrl);
-            (sitemap.length > 0) ? urls.push(...sitemap) : null;
+            if (sitemap.length > 0) {
+                urls.push(...sitemap);
+            }
             console.log("The sitemap contains %d URLs", sitemap.length)
         }
 
         const taskId = randomBytes(4).toString("hex")
-        console.log("Creating Task")
-
-        await updateTask(taskId)
+        console.log("Creating Task...")
 
         await sendMessage({
             topic: "crawl_links",
@@ -88,11 +88,13 @@ async function handleMessage(topic, data) {
                 links: urls
             }
         })
+        console.log("Task Created...")
     } else if (topic === "crawl_links") {
         const { taskId, baseUrl, links } = data;
         await robots.useRobotsFor(baseUrl)
 
         const filteredLinks = Array.from(new Set(links)).filter(link => robots.canCrawlSync(link)).map(link => sanitiseURL(link))
+        console.log(filteredLinks)
 
         for (let i = 0; i < filteredLinks.length; i++) {
             const linksToVisit = filteredLinks.splice(0, BATCH_SIZE)
@@ -110,14 +112,13 @@ async function handleMessage(topic, data) {
     } else if (topic === "crawl_links_batch") {
         const { taskId, baseUrl, linksToVisit } = data
 
-        while (lock.isBusy(key))
-            await sleep(5);
-
         lock.acquire(key, async () => {
             for (let link of linksToVisit) {
-                if (redis.sIsMember(`tasks:${taskId}:visitedLinks`, link))
+                if ((await redis.sIsMember(`tasks:${taskId}:visitedLinks`, link)))
                     linksToVisit.splice(linksToVisit.indexOf(link), 1)
             }
+
+            console.log("Filtered links to visit:", linksToVisit)
 
             const visitedNodes = await createWorkerPromise({
                 linksToVisit
@@ -133,7 +134,8 @@ async function handleMessage(topic, data) {
                 }
             }
 
-            await sendMessage({
+            if(newLinks.length > 0) {
+                await sendMessage({
                 topic: "crawl_links",
                 data: {
                     taskId,
@@ -141,10 +143,12 @@ async function handleMessage(topic, data) {
                     links: newLinks
                 }
             })
+            }
 
             await sleep(1)
 
-            await sendMessage({
+            if(visitedNodes?.length > 0) {
+                await sendMessage({
                 topic: "insert_nodes",
                 data: {
                     taskId,
@@ -152,15 +156,18 @@ async function handleMessage(topic, data) {
                     nodes: visitedNodes
                 }
             })
+            }
         })
     } else if (topic === "insert_nodes") {
         const { taskId, baseUrl, nodes } = data
 
-        console.log(`Task #${taskId} - Inserting Nodes...`)
-        await insertNodes(nodes.filter((p) => Object.keys(p).length > 0))
-        console.table(nodes)
+        if(nodes.length > 0) {
+            console.log(`Task #${taskId} - Inserting Nodes...`)
+            await insertNodes(nodes.filter((p) => Object.keys(p).length > 0))
+            console.table(nodes)
 
-        await redis.expire(`tasks:${taskId}:visitedLinks`, 3600) // TTL: 1 hr
+            await redis.expire(`tasks:${taskId}:visitedLinks`, 3600) // TTL: 1 hr
+        }
     }
 }
 

@@ -1,0 +1,42 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nexus-search-backend
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: nexus-search-backend
+  template:
+    metadata:
+      labels:
+        app: nexus-search-backend
+    spec:
+      initContainers:
+        - name: wait-for-kafka
+          image: busybox
+          imagePullPolicy: IfNotPresent
+          command: ['sh', '-c', 'until nc -z kafka 9092; do echo "Waiting for Kafka..."; sleep 5; done']
+      containers:
+        - name: nexus-search-backend
+          image: nishithp/nexus-search-backend:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3000
+          envFrom:
+            - configMapRef:
+                name: nexus-search-env
+            - secretRef:
+                name: nexus-search-secrets
+          volumeMounts:
+            - name: env-volume
+              mountPath: /app/.env
+              subPath: .env
+      volumes:
+        - name: env-volume
+          configMap:
+            name: nexus-search-env
+            items:
+              - key: .env
+                path: .env
+          

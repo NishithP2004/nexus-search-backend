@@ -26,8 +26,15 @@ import {
     ChatPromptTemplate,
     MessagesPlaceholder,
 } from "@langchain/core/prompts"
-import { Ollama, OllamaEmbeddings } from "@langchain/ollama"
-import { client as redis } from "./services/redis.js"
+import {
+    Ollama,
+    OllamaEmbeddings
+} from "@langchain/ollama"
+import {
+    client as redis
+} from "./services/redis.js"
+import "dotenv/config"
+import { getSearchResults } from "./services/neo4j.js"
 
 import Sitemapper from 'sitemapper'
 const sitemapper = new Sitemapper();
@@ -36,11 +43,6 @@ const robots = robotsParser({
     userAgent: 'Googlebot', // The default user agent to use when looking for allow/disallow rules, if this agent isn't listed in the active robots.txt, we use *.
     allowOnNeutral: false // The value to use when the robots.txt rule's for allow and disallow are balanced on whether a link can be crawled.
 });
-
-import {
-    client as redis
-} from "./services/redis.js"
-import "dotenv/config"
 
 /* const model = new ChatGoogleGenerativeAI({
     model: "gemini-pro",
@@ -114,6 +116,9 @@ async function extract_keywords(documents) {
                         output: cloud computing, broadcom, vmware
 
                         The output format will always be keyword1, keyword2, ...
+
+                        STRICTLY ADHERE TO THE OUTPUT FORMAT AND ONLY RETURN A COMMA SEPARATED VALUE AS SHOWN BELOW:
+                        keyword1, keyword2, ...
             `
 
                 let res = (await model.invoke([
@@ -187,18 +192,20 @@ function sanitiseURL(url) {
 }
 
 const visitPage = async (url) => {
-    if(!browser) {
+    let page = null;
+    if (!browser) {
         browser = await puppeteer.launch({
-            args: ['--no-sandbox'],
-            headless: "new",
-            executablePath: "/usr/bin/chromium"
+            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
+            headless: false,
+            // executablePath: "/usr/bin/chromium"
         })
     }
 
     try {
-        const page = await browser.newPage();
+        page = await browser.newPage();
         await page.goto(url, {
-            waitUntil: "networkidle0"
+            waitUntil: "networkidle0",
+            timeout: 60000 // 60 seconds
         });
         const content = await page.evaluate(() => document.body.innerHTML);
         const webpage = new Webpage();
@@ -228,8 +235,6 @@ const visitPage = async (url) => {
             // Secondary Processing
             webpage.links = Array.from(new Set(links.map(link => sanitiseURL(link)).filter((link) => link.includes(hostname) == true)));
 
-            await browser.close();
-
             const {
                 keywords,
                 embeddings,
@@ -246,11 +251,20 @@ const visitPage = async (url) => {
             throw err
     } finally {
         // await browser.close();
+        await page?.close()
     }
 }
 
-async function killBrowser() {
-    await browser.close()
+async function killBrowserSession() {
+    try {
+        if(!browser) {
+            return
+        } else {
+            await browser.close()
+        }
+    } catch(err) {
+        console.error("Error killing browser session:", err.message)
+    }
 }
 
 async function getWebsiteContent(url) {
@@ -277,7 +291,7 @@ async function getWebsiteContent(url) {
 async function generativeAISearchResults(query, sources, sessionId = "foobarz") {
     try {
         let context;
-        context = (sources && sources.length > 0)? (await Promise.all(sources.map(async sr => {
+        context = (sources && sources.length > 0) ? (await Promise.all(sources.map(async sr => {
             return ({
                 url: sr.url,
                 title: sr.title,
@@ -310,11 +324,13 @@ async function generativeAISearchResults(query, sources, sessionId = "foobarz") 
             ["human", prompt.trim()]
         ]);
 
-        const chain = chatPrompt.pipe(/* new ChatGoogleGenerativeAI({
-            modelName: "gemini-1.5-flash", 
-            apiKey: process.env.GEMINI_API_KEY,
-            temperature: 0.7
-        }) */ model);
+        const chain = chatPrompt.pipe(
+            /* new ChatGoogleGenerativeAI({
+                        modelName: "gemini-1.5-flash", 
+                        apiKey: process.env.GEMINI_API_KEY,
+                        temperature: 0.7
+                    }) */
+            model);
 
         const chainWithHistory = new RunnableWithMessageHistory({
             runnable: chain,
@@ -337,7 +353,8 @@ async function generativeAISearchResults(query, sources, sessionId = "foobarz") 
             configurable: {
                 sessionId: sessionId
             }
-        })).content;
+        }));
+        console.log(res)
 
         return res;
     } catch (err) {
@@ -345,14 +362,84 @@ async function generativeAISearchResults(query, sources, sessionId = "foobarz") 
     }
 }
 
-async function updateTask(taskId, status="started") {
-    return redis.hSet(`task:${hash}`, {
-        status,
-        lastModified: new Date().getTime()
-    })
+async function searchOnCall(query, sessionId = "foobarz") {
+    try {
+        const results = await getSearchResults(query);
+        const sources = [results["semantic_keyword_search"][0]]
+        let context;
+        context = (sources && sources.length > 0) ? (await Promise.all(sources.map(async sr => {
+            return ({
+                url: sr.url,
+                title: sr.title,
+                summary: sr.summary,
+                content: ((await redis.exists(sr.url)) ? await redis.get(sr.url) : await getWebsiteContent(sr.url).then(content => {
+                    redis.set(sr.url, content, {
+                        EX: 60 * 5
+                    });
+                    return content;
+                }))
+            })
+        }))) : null;
+
+        const prompt = `
+        SYSTEM: You are a knowledgeable "Search-on-Call" AI assistant. 
+        Your task is to analyze markdown content from websites provided as context and deliver short, clear, and accurate answers tailored to the user’s query. 
+        Responses must be concise, natural, and optimized for delivery over a phone call — perfect for a quick and informative voice interaction.
+
+        QUERY: {query}
+        
+        ${context? 
+            `CONTEXT
+            ------
+            ${context.map((c, i) => `Website ${i+1} (${c.title} - ${c.url}): \nSite Summary: ${c.summary} \n${c.content}`).join("\n")}`: ""
+        }
+        `
+
+        console.log(prompt.trim())
+        const chatPrompt = ChatPromptTemplate.fromMessages([
+            new MessagesPlaceholder("history"),
+            ["human", prompt.trim()]
+        ]);
+
+        const chain = chatPrompt.pipe(
+            /* new ChatGoogleGenerativeAI({
+                        modelName: "gemini-1.5-flash", 
+                        apiKey: process.env.GEMINI_API_KEY,
+                        temperature: 0.7
+                    }) */
+            model);
+
+        const chainWithHistory = new RunnableWithMessageHistory({
+            runnable: chain,
+            getMessageHistory: (sessionId) =>
+                new UpstashRedisChatMessageHistory({
+                    sessionId,
+                    sessionTTL: 300,
+                    config: {
+                        url: process.env.UPSTASH_REDIS_HOST,
+                        token: process.env.UPSTASH_REDIS_TOKEN,
+                    },
+                }),
+            inputMessagesKey: "query",
+            historyMessagesKey: "history"
+        });
+
+        const res = (await chainWithHistory.invoke({
+            query
+        }, {
+            configurable: {
+                sessionId: sessionId
+            }
+        }));
+
+        return res;
+    } catch(err) {
+        console.error("Error generating response for query (Search on Call):", err.message)
+        throw err
+    }
 }
 
-async function sleep(delay=1) {
+async function sleep(delay = 1) {
     return new Promise((resolve, reject) => {
         setTimeout(() => {
             resolve()
@@ -370,6 +457,7 @@ export {
     fetchUrlsFromSitemap,
     robots,
     generativeAISearchResults,
-    updateTask,
-    sleep
+    sleep,
+    killBrowserSession,
+    searchOnCall
 }

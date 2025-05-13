@@ -6,13 +6,16 @@ import {
 import { Server } from "socket.io"
 import "dotenv/config";
 import {
-    generativeAISearchResults
+    generativeAISearchResults,
+    killBrowserSession
 } from "./utils.js";
 
 import {
     getSearchResults
 } from "./services/neo4j.js"
-import { sendMessage } from "./services/kafka.js";
+import { initKafka, sendMessage } from "./services/kafka.js";
+import twilio from "./services/twilio.js"
+import fs from "node:fs/promises"
 
 const app = express();
 app.use(express.json())
@@ -34,17 +37,19 @@ instrument(io, {
     auth: false,
 });
 
+await initKafka()
 server.listen(PORT, "0.0.0.0", () => {
     console.log(`Listening on port: ${PORT}`);
 })
 
 app.get("/", (req, res) => {
     res.send({
-        message: "Welcome to Nexus Search Backend!",
+        message: "Welcome to the Nexus Search Backend!",
         success: true
     })
 })
 
+app.use("/twilio", twilio)
 
 app.post("/crawl", async (req, res) => {
     let url = req.body.url;
@@ -91,7 +96,8 @@ app.get("/search", async (req, res) => {
 
             res.status(200).send({
                 success: true,
-                results: search_results
+                results: search_results["semantic_keyword_search"],
+                performance: search_results["performance"]
             })
         }
     } catch (err) {
@@ -124,4 +130,15 @@ io.on('connection', (client) => {
             }
         }
     })
+})
+
+process.on("SIGINT", async () => {
+    console.log("Killing browser session...")
+    await killBrowserSession()
+    console.log("Removing 'temp' dir...")
+    await fs.rm("temp", {
+        recursive: true
+    })
+    console.log("done")
+    process.exit(0)
 })

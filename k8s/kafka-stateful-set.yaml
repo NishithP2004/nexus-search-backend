@@ -6,7 +6,7 @@ metadata:
   name: kafka
 spec:
   serviceName: kafka
-  replicas: 3
+  replicas: 1
   selector:
     matchLabels:
       service: kafka
@@ -22,7 +22,7 @@ spec:
       containers:
       - name: kafka
         imagePullPolicy: IfNotPresent
-        image: bitnami/kafka:latest
+        image: bitnami/kafka:3.4.0
         ports:
           - containerPort: 29092
           - containerPort: 9092
